@@ -1,0 +1,252 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workflows_ImageProcessingLogicApp_name": {
+            "defaultValue": "ImageProcessingLogicApp",
+            "type": "String"
+        },
+        "sites_ImageProcessingService20231102194033_externalid": {
+            "defaultValue": "/subscriptions/b0fd0a92-5178-48a1-bd9c-666ad405b37a/resourceGroups/BootcampAzureTask/providers/Microsoft.Web/sites/ImageProcessingService20231102194033",
+            "type": "String"
+        },
+        "connections_azureblob_6_externalid": {
+            "defaultValue": "/subscriptions/b0fd0a92-5178-48a1-bd9c-666ad405b37a/resourceGroups/ImageProcessingLogicApp_group/providers/Microsoft.Web/connections/azureblob-6",
+            "type": "String"
+        },
+        "connections_documentdb_externalid": {
+            "defaultValue": "/subscriptions/b0fd0a92-5178-48a1-bd9c-666ad405b37a/resourceGroups/ImageProcessingLogicApp_group/providers/Microsoft.Web/connections/documentdb",
+            "type": "String"
+        },
+        "connections_servicebus_externalid": {
+            "defaultValue": "/subscriptions/b0fd0a92-5178-48a1-bd9c-666ad405b37a/resourceGroups/ImageProcessingLogicApp_group/providers/Microsoft.Web/connections/servicebus",
+            "type": "String"
+        }
+    },
+    "variables": {},
+    "resources": [
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflows_ImageProcessingLogicApp_name')]",
+            "location": "northeurope",
+            "properties": {
+                "state": "Disabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        },
+                        "MaxImageSize": {
+                            "defaultValue": 250000,
+                            "type": "Int"
+                        },
+                        "TaskId": {
+                            "defaultValue": "c6c4cdd8-2585-4a1b-a989-f7e7d22edb0f",
+                            "type": "String"
+                        }
+                    },
+                    "triggers": {
+                        "When_a_message_is_received_in_a_topic_subscription_(auto-complete)": {
+                            "recurrence": {
+                                "frequency": "Minute",
+                                "interval": 3
+                            },
+                            "evaluatedRecurrence": {
+                                "frequency": "Minute",
+                                "interval": 3
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['servicebus']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/@{encodeURIComponent(encodeURIComponent('testtopic'))}/subscriptions/@{encodeURIComponent('MyAppSubscription')}/messages/head",
+                                "queries": {
+                                    "subscriptionType": "Main"
+                                }
+                            }
+                        }
+                    },
+                    "actions": {
+                        "Condition": {
+                            "actions": {
+                                "RotateImg": {
+                                    "runAfter": {},
+                                    "type": "Function",
+                                    "inputs": {
+                                        "function": {
+                                            "id": "[concat(parameters('sites_ImageProcessingService20231102194033_externalid'), '/functions/RotateImg')]"
+                                        },
+                                        "headers": {
+                                            "x-functions-key": "VIKTmnh3PnsLCyckqUXJhVj9fNx4hEGz1NUJqgL5Xe1ZAzFu_8Rglw=="
+                                        },
+                                        "method": "GET",
+                                        "queries": {
+                                            "id": "@{base64ToString(triggerBody()?['ContentData'])}"
+                                        }
+                                    }
+                                }
+                            },
+                            "runAfter": {
+                                "Get_Blob_Metadata_(V2)": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {
+                                    "Create_or_update_document_(V3)": {
+                                        "runAfter": {},
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                            "body": {
+                                                "FileName": "@{body('Parse_JSON')?['FileName']}",
+                                                "OriginalFilePath": "@{body('Parse_JSON')?['OriginalFilePath']}",
+                                                "ProcessedFilePath": "@{body('Parse_JSON')?['ProcessedFilePath']}",
+                                                "State": "error",
+                                                "id": "@{base64ToString(triggerBody()?['ContentData'])}"
+                                            },
+                                            "headers": {
+                                                "x-ms-documentdb-is-upsert": true
+                                            },
+                                            "host": {
+                                                "connection": {
+                                                    "name": "@parameters('$connections')['documentdb']['connectionId']"
+                                                }
+                                            },
+                                            "method": "post",
+                                            "path": "/v2/cosmosdb/@{encodeURIComponent('AccountNameFromSettings')}/dbs/@{encodeURIComponent('Images')}/colls/@{encodeURIComponent('TaskState')}/docs"
+                                        }
+                                    }
+                                }
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "less": [
+                                            "@body('Get_Blob_Metadata_(V2)')?['Size']",
+                                            "@parameters('MaxImageSize')"
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Get_Blob_Metadata_(V2)": {
+                            "runAfter": {
+                                "Get_blob_content_(V2)": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azureblob']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent('/imagescontainer/',body('Parse_JSON')?['FileName']))}"
+                            }
+                        },
+                        "Get_a_document_(V2)": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "headers": {
+                                    "x-ms-documentdb-raw-partitionkey": "\"@{base64ToString(triggerBody()?['ContentData'])}\""
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['documentdb']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/v2/cosmosdb/@{encodeURIComponent('AccountNameFromSettings')}/dbs/@{encodeURIComponent('Images')}/colls/@{encodeURIComponent('TaskState')}/docs/@{encodeURIComponent(base64ToString(triggerBody()?['ContentData']))}"
+                            }
+                        },
+                        "Get_blob_content_(V2)": {
+                            "runAfter": {
+                                "Parse_JSON": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azureblob']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent('/imagescontainer/',body('Parse_JSON')?['FileName']))}/content",
+                                "queries": {
+                                    "inferContentType": true
+                                }
+                            }
+                        },
+                        "Parse_JSON": {
+                            "runAfter": {
+                                "Get_a_document_(V2)": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ParseJson",
+                            "inputs": {
+                                "content": "@body('Get_a_document_(V2)')",
+                                "schema": {
+                                    "properties": {
+                                        "FileName": {
+                                            "type": "string"
+                                        },
+                                        "OriginalFilePath": {
+                                            "type": "string"
+                                        },
+                                        "ProcessedFilePath": {
+                                            "type": "string"
+                                        },
+                                        "State": {
+                                            "type": "string"
+                                        },
+                                        "id": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "azureblob": {
+                                "connectionId": "[parameters('connections_azureblob_6_externalid')]",
+                                "connectionName": "azureblob-6",
+                                "id": "/subscriptions/b0fd0a92-5178-48a1-bd9c-666ad405b37a/providers/Microsoft.Web/locations/northeurope/managedApis/azureblob"
+                            },
+                            "documentdb": {
+                                "connectionId": "[parameters('connections_documentdb_externalid')]",
+                                "connectionName": "documentdb",
+                                "id": "/subscriptions/b0fd0a92-5178-48a1-bd9c-666ad405b37a/providers/Microsoft.Web/locations/northeurope/managedApis/documentdb"
+                            },
+                            "servicebus": {
+                                "connectionId": "[parameters('connections_servicebus_externalid')]",
+                                "connectionName": "servicebus",
+                                "id": "/subscriptions/b0fd0a92-5178-48a1-bd9c-666ad405b37a/providers/Microsoft.Web/locations/northeurope/managedApis/servicebus"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
